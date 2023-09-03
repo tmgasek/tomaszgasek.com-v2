@@ -1,37 +1,13 @@
 ---
 import { getCollection } from "astro:content"
 import BaseLayout from "../../layouts/base.astro"
+import PostItems from "../../components/post-items.astro"
 
 const allPosts = await getCollection("post")
-  const uniqueTags = [...new Set(allPosts.map((post) => post.data.tags).flat())];
+const uniqueTags = [...new Set(allPosts.map((post) => post.data.tags).flat())]
 ---
 
 <BaseLayout>
-    <div class="tag-container">
-        {
-            Array.from(uniqueTags).map((tag) => {
-                return <a class="tag" href=`/tags/${tag}`>{tag}</a>
-            })
-        }
-    </div>
-    <div class="blog-container">
-        {
-            allPosts.map((post) => {
-                return (
-                    <div class="post">
-                        <h2>
-                            <a href={`/posts/${post.slug}`}>{post.data.title}</a>
-                        </h2>
-
-                        <time datetime={post.data.publishDate.toISOString()}>
-                            {post.data.publishDate.toDateString()}
-                        </time>
-
-                        <p>{post.data.description}</p>
-                        <a href={`/blog/${post.slug}`}>read</a>
-                    </div>
-                )
-            })
-        }
-    </div>
+    <PostItems posts={allPosts} />
+     r/BaseLayout>
 </BaseLayout>

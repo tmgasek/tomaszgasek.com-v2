@@ -2,7 +2,7 @@
 title: "test title 1"
 description: "sample desc"
 publishDate: 2023-09-02
-tags: ["test", "vim", "ts"]
+tags: ["test", "vim", "ts", "tag1", "webdev", "css", "golang"]
 ---
 
 ---

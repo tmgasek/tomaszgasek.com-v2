@@ -1,0 +1,36 @@
+---
+import { getCollection } from "astro:content"
+import BaseLayout from "../../layouts/base.astro"
+
+const allPosts = await getCollection("post")
+const uniqueTags = [...new Set(allPosts.map((post) => post.data.tags).flat())]
+---
+
+<BaseLayout>
+    <div class="tags-container"></div>
+    {
+        uniqueTags.map((tag) => {
+            return (
+                <a class="tag" href={`/tags/${tag}`}>
+                    {tag}
+                </a>
+            )
+        })
+    }
+</BaseLayout>
+
+<style>
+    .tags-container {
+        display: flex;
+    }
+
+    .tag {
+        text-decoration: none;
+    }
+
+    .tag + .tag::before {
+        content: "·";
+        text-decoration: none;
+        margin: 0 4px;
+    }
+</style>

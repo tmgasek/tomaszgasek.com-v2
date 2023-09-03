@@ -1,0 +1,79 @@
+---
+import type { CollectionEntry } from "astro:content"
+
+interface Props {
+    posts: CollectionEntry<"post">[]
+}
+
+const { posts } = Astro.props
+---
+
+<div class="blog-container">
+    {
+        posts.map((post) => {
+            return (
+                <div class="post">
+                    <h2>
+                        <a href={`/posts/${post.slug}`}>{post.data.title}</a>
+                    </h2>
+
+                    <div class="meta">
+                        <time datetime={post.data.publishDate.toISOString()}>
+                            {post.data.publishDate.toDateString()}
+                        </time>
+                        <span>|</span>
+                        <div>
+                            {post.data.tags.map((tag, idx) => {
+                                return (
+                                    <span>
+                                        <a class="tag" href={`/tags/${tag}`}>
+                                            {tag}
+                                        </a>
+                                        {idx !== post.data.tags.length - 1 ? (
+                                            <span> · </span>
+                                        ) : null}
+                                    </span>
+                                )
+                            })}
+                        </div>
+                    </div>
+
+                    <p class="description">{post.data.description}</p>
+                    <a class="read-more" href={`/posts/${post.slug}`}>
+                        Read more
+                    </a>
+                </div>
+            )
+        })
+    }
+</div>
+
+<style>
+    .blog-container {
+        display: flex;
+        flex-direction: column;
+        gap: 1em;
+    }
+
+    .meta {
+        display: flex;
+        gap: 0.5em;
+    }
+
+    .post {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        background-color: rgba(0, 0, 0, 0.05);
+        padding: 1em;
+        border-radius: 0.25em;
+    }
+
+    .description {
+        margin-top: 1em;
+    }
+
+    .read-more {
+        align-self: flex-end;
+    }
+</style>

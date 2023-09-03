@@ -3,5 +3,55 @@ import BaseLayout from "../layouts/base.astro"
 ---
 
 <BaseLayout title="Home">
-    <div>Welcome</div>
+    <section>
+        <h2>Hey, I'm Tom! Welcome to my little site.</h2>
+        <p class="subheading">
+            I'm a software engineer based in Northern Ireland, currently working
+            for <a href="https://niice.co/">Niice</a>.
+        </p>
+        <p class="subheading">
+            I made this site to share some ideas and thoughts on different
+            topics around the world of software development.
+        </p>
+        <p class="subheading">
+            Here, you'll find info on random things I discovered, how I solved
+            some problems, what I'm currently working on, and more.
+        </p>
+        <p class="subheading">
+            I primarily work in the area of web development, but I take an
+            active interest in all manners of programming. Check out my <a
+                href="https://github.com/tmgasek?tab=repositories">Github</a
+            >!
+        </p>
+    </section>
+
+    <section>
+        <h3>Currently, I am:</h3>
+        <ul class="current-activities">
+            <li>
+                Self-studying <a href="https://sp21.datastructur.es/">CS61B</a>.
+            </li>
+            <li>
+                In my 3rd year of QUB Software Development course (part-time).
+            </li>
+            <li>Learning Go.</li>
+        </ul>
+    </section>
 </BaseLayout>
+
+<style>
+    h2 {
+        margin-bottom: 1em;
+    }
+    .subheading {
+        margin-bottom: 1em;
+    }
+
+    .current-activities {
+        margin: 0;
+    }
+
+    section {
+        margin: 2em 0;
+    }
+</style>

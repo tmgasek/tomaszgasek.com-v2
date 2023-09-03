@@ -2,6 +2,7 @@
 import type { CollectionEntry } from "astro:content"
 import { getCollection } from "astro:content"
 import BaseLayout from "../../layouts/base.astro"
+import PostItems from "../../components/post-items.astro"
 
 export async function getStaticPaths() {
     const allPosts = await getCollection("post")
@@ -27,23 +28,18 @@ const { posts } = Astro.props
 ---
 
 <BaseLayout title={tag}>
-    <p>Posts tagged with {tag}</p>{tag}
-    {
-        posts.map((post) => {
-            return (
-                <div class="post">
-                    <h2>
-                        <a href={`/posts/${post.slug}`}>{post.data.title}</a>
-                    </h2>
-
-                    <time datetime={post.data.publishDate.toISOString()}>
-                        {post.data.publishDate.toDateString()}
-                    </time>
-
-                    <p>{post.data.description}</p>
-                    <a href={`/posts/${post.slug}`}>read</a>
-                </div>
-            )
-        })
-    }
+    <div class="tag-heading">
+        <h2>Posts about {tag}</h2>
+        <p>View all <a href="/tags">tags</a></p>
+    </div>
+    <PostItems posts={posts} />
 </BaseLayout>
+
+<style>
+    .tag-heading {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1em;
+    }
+</style>

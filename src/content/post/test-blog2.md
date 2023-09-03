@@ -1,6 +1,6 @@
 ---
 title: "test title 1"
-description: "sample desc"
+description: "Lorem ipsum dolor sit amet, oi anim cupidatat excepteur officia. Reprehenderit nostrud nostrud ipsum Lorem est a desc"
 publishDate: 2023-09-02
 tags: ["test", "vim", "ts"]
 ---
