@@ -1,0 +1,29 @@
+---
+import { getCollection } from "astro:content"
+import BaseLayout from "../../layouts/base.astro"
+
+const allBlogs = await getCollection("blog")
+---
+
+<BaseLayout>
+    <ul>
+        {
+            allBlogs.map((blog) => {
+                return (
+                    <div class="blog">
+                        <h2>
+                            <a href={`/blog/${blog.slug}`}>{blog.data.title}</a>
+                        </h2>
+
+                        <time datetime={blog.data.publishDate.toISOString()}>
+                            {blog.data.publishDate.toDateString()}
+                        </time>
+
+                        <p>{blog.data.description}</p>
+                        <a href={`/blog/${blog.slug}`}>read</a>
+                    </div>
+                )
+            })
+        }
+    </ul>
+</BaseLayout>
