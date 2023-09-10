@@ -30,7 +30,7 @@ const { posts } = Astro.props
 <BaseLayout title={tag}>
     <div class="tag-heading">
         <h2>Posts about {tag}</h2>
-        <p>View all <a href="/tags">tags</a></p>
+        <a href="/tags">View all tags</a>
     </div>
     <PostItems posts={posts} />
 </BaseLayout>

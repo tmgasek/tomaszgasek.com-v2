@@ -9,11 +9,17 @@ const uniqueTags = [...new Set(allPosts.map((post) => post.data.tags).flat())]
 <BaseLayout>
     <div class="tags-container"></div>
     {
-        uniqueTags.map((tag) => {
+        uniqueTags.map((tag, idx) => {
             return (
-                <a class="tag" href={`/tags/${tag}`}>
-                    {tag}
-                </a>
+                <span>
+                    <a class="tag" href={`/tags/${tag}`}>
+                        {tag}
+                    </a>
+
+                    {idx !== uniqueTags.length - 1 ? (
+                        <span class="dot">·</span>
+                    ) : null}
+                </span>
             )
         })
     }
@@ -24,13 +30,7 @@ const uniqueTags = [...new Set(allPosts.map((post) => post.data.tags).flat())]
         display: flex;
     }
 
-    .tag {
-        text-decoration: none;
-    }
-
-    .tag + .tag::before {
-        content: "·";
-        text-decoration: none;
+    .dot {
         margin: 0 4px;
     }
 </style>
