@@ -39,9 +39,9 @@ const { posts } = Astro.props
                     </div>
 
                     <p class="description">{post.data.description}</p>
-                    <a class="read-more" href={`/posts/${post.slug}`}>
-                        Read more &rarr;
-                    </a>
+                    <div class="read-more">
+                        <a href={`/posts/${post.slug}`}>Read more &rarr;</a>
+                    </div>
                 </div>
             )
         })
@@ -51,6 +51,11 @@ const { posts } = Astro.props
 <style>
     h2 {
         text-transform: capitalize;
+        color: black;
+    }
+
+    h2 > a {
+        color: black;
     }
 
     .blog-container {
@@ -69,16 +74,12 @@ const { posts } = Astro.props
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        background-color: rgba(0, 0, 0, 0.1);
-        padding: 0.8em 1em;
+        /* background-color: rgba(0, 0, 0, 0.1); */
         border-radius: 0.25em;
+        padding-bottom: 2.5em;
     }
 
     .description {
         margin-top: 1em;
-    }
-
-    .read-more {
-        align-self: flex-end;
     }
 </style>

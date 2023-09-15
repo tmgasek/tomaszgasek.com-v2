@@ -1,15 +1,23 @@
 ---
 import { ViewTransitions, fade } from "astro:transitions"
+
 const navItems = [
-    { path: "/", label: "Home" },
-    { path: "/posts", label: "Posts" },
-    { path: "/projects", label: "Projects" },
+    { path: "/", label: "Home", active: false },
+    { path: "/posts", label: "Posts", active: false },
+    { path: "/projects", label: "Projects", active: false },
 ]
+
+for (const nav of navItems) {
+    const pathname = Astro.url.pathname
+    if (pathname === nav.path) {
+        nav.active = true
+    }
+}
 
 const { title } = Astro.props
 ---
 
-<html lang="en" transition:animate="initial">
+<html lang="en" transition:animate="fade">
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -21,14 +29,20 @@ const { title } = Astro.props
         <header>
             <div class="header-container">
                 <a class="logo" href="/" rel="home">
-                    <span role="img" aria-label="logo">tmg</span>
+                    <span role="img" aria-label="logo">[tmg]</span>
                 </a>
 
                 <nav>
                     {
                         navItems.map((item) => {
                             return (
-                                <a class="nav-item" href={item.path}>
+                                <a
+                                    class:list={[
+                                        "nav-item",
+                                        { active: item.active },
+                                    ]}
+                                    href={item.path}
+                                >
                                     {item.label}
                                 </a>
                             )
@@ -58,6 +72,7 @@ const { title } = Astro.props
                 margin: auto;
                 display: flex;
                 justify-content: space-between;
+                padding: 0.4em 1em;
             }
 
             nav {
@@ -67,11 +82,24 @@ const { title } = Astro.props
                 padding: 0 1rem;
             }
 
+            .logo > span {
+                text-decoration: underline;
+                text-decoration-style: double;
+            }
+
             .nav-item,
             .logo {
-                padding-top: 0.5rem;
                 color: var(--white);
                 text-decoration: none;
+            }
+
+            .nav-item {
+                padding: 0 0.4rem;
+            }
+
+            .nav-item.active {
+                border-radius: 2px;
+                background-color: #7daea3;
             }
 
             .nav-item:hover {
@@ -81,10 +109,12 @@ const { title } = Astro.props
 
         <style is:global>
             :root {
-                --bg: #242933;
-                --white: #bbc3d4;
-                --cyan: #8fbcbb;
+                --bg: #fff;
+                --white: #0a0a0a;
+                --cyan: #7daea3;
                 --orange-dim: #cb775d;
+                --white-dim: #bbc3d4;
+                --black: #191d24;
             }
 
             @font-face {
@@ -214,8 +244,7 @@ const { title } = Astro.props
                 margin-top: 1em;
             }
 
-            /* @media screen and (prefers-color-scheme: dark) { */
-            body {
+            main {
                 background-color: var(--bg);
                 color: var(--white);
                 padding: 0 1em;
@@ -224,13 +253,13 @@ const { title } = Astro.props
             a {
                 color: var(--cyan);
             }
-            /* } */
 
             a:hover {
             }
 
             pre {
                 font-size: 0.8em;
+                padding: 1em;
                 /* background-color: black !important; */
             }
 
