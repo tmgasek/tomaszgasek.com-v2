@@ -4,8 +4,13 @@ import BaseLayout from "../../layouts/base.astro"
 import PostItems from "../../components/post-items.astro"
 
 const allPosts = await getCollection("post")
+const sortedPosts = allPosts.sort(
+    (a, b) =>
+        new Date(b.data.publishDate).getTime() -
+        new Date(a.data.publishDate).getTime()
+)
 ---
 
 <BaseLayout>
-    <PostItems posts={allPosts} />
+    <PostItems posts={sortedPosts} />
 </BaseLayout>

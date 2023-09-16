@@ -16,12 +16,51 @@ interface Props {
 }
 
 const { entry } = Astro.props
-const { Content } = await entry.render()
+const { Content, remarkPluginFrontmatter } = await entry.render()
 ---
 
 <BaseLayout>
-    <h1>{entry.data.title}</h1>
+    <div class="intro">
+        <h1>{entry.data.title}</h1>
+        <span>{entry.data.publishDate.toDateString()}</span>
+        <span class="time-to-read">
+            {remarkPluginFrontmatter.minutesRead}
+        </span>
+        <div>
+            {
+                entry.data.tags.map((tag, idx) => {
+                    return (
+                        <span>
+                            <a class="tag" href={`/tags/${tag}`}>
+                                {tag}
+                            </a>
+                            {idx !== entry.data.tags.length - 1 ? (
+                                <span> · </span>
+                            ) : null}
+                        </span>
+                    )
+                })
+            }
+        </div>
+    </div>
     <article>
         <Content />
     </article>
 </BaseLayout>
+
+<style>
+    h1 {
+        margin: 0;
+    }
+    .intro {
+        box-shadow:
+            rgba(0, 0, 0, 0.05) 0px 6px 24px 0px,
+            rgba(0, 0, 0, 0.08) 0px 0px 0px 1px;
+        border: 2px solid var(--black);
+        border-radius: 4px;
+        display: flex;
+        padding: 1em;
+        flex-direction: column;
+        margin-bottom: 3em;
+    }
+</style>
