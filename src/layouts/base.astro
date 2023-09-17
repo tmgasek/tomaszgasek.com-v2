@@ -19,8 +19,14 @@ const { title } = Astro.props
                 <Logo />
 
                 <nav>
-                    <a class="nav-item" href="/">Home</a>
-                    <a class="nav-item" href="/posts">Posts</a>
+                    <ul>
+                        <li>
+                            <a class="nav-item" href="/">Home</a>
+                        </li>
+                        <li>
+                            <a class="nav-item" href="/posts">Posts</a>
+                        </li>
+                    </ul>
                 </nav>
             </div>
         </header>
@@ -478,10 +484,15 @@ const { title } = Astro.props
                 padding: 0.4em 0;
             }
 
-            nav {
-                align-self: flex-end;
+            nav ul {
                 display: flex;
                 gap: 1em;
+                list-style-type: none;
+                margin: 0;
+            }
+
+            nav ul li {
+                display: flex;
             }
 
             .nav-item {

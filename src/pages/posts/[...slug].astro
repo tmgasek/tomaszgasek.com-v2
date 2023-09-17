@@ -19,7 +19,7 @@ const { entry } = Astro.props
 const { Content, remarkPluginFrontmatter } = await entry.render()
 ---
 
-<BaseLayout>
+<BaseLayout title={entry.data.title}>
     <div class="intro">
         <h1>{entry.data.title}</h1>
         <span>{entry.data.publishDate.toDateString()}</span>
