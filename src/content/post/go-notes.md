@@ -14,6 +14,8 @@ Goals of go
 
 ### 00 - Intro and Why Use Go?
 
+Easy to deploy - put a go program in container and good to go.
+
 ### 01 - Hello world!
 
 ### 02 - Simple Example
@@ -1571,9 +1573,383 @@ We gotta think about trees, subtrees. We don't modify a context, we add subtree.
 -   AKA, any new children will point up to my context with a timeout, but the
     timeout will not apply to anything "above" me.
 
+```go
+type result struct {
+	url     string
+	err     error
+	latency time.Duration
+}
+
+func get(ctx context.Context, url string, ch chan<- result) {
+	var r result
+
+	start := time.Now()
+	ticker := time.NewTicker(1 * time.Second).C
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+
+	if resp, err := http.DefaultClient.Do(req); err != nil {
+		// put result on a var, dont put it on chan immediately.
+		r = result{url, err, 0}
+	} else {
+		t := time.Since(start).Round(time.Millisecond)
+		r = result{url, nil, t}
+		resp.Body.Close()
+	}
+
+	for {
+		select {
+		case ch <- r:
+			return
+		case <-ticker:
+			log.Println("tick", r)
+		}
+	}
+}
+
+// we start multiple requests, get one response, make the other ones cancel.
+func first(ctx context.Context, urls []string) (*result, error) {
+	results := make(chan result)
+	// results := make(chan result, len(urls)) // buffer to avoid leaking, solves bug.
+	ctx, cancel := context.WithCancel(ctx)
+
+	defer cancel()
+
+	for _, url := range urls {
+		go get(ctx, url, results)
+	}
+
+	select {
+	// we ge the first response by listening to the results channel.
+	// What happens to the other go routines?
+	case r := <-results:
+		return &r, nil // we do deferred cancellation
+	// we need this case because we had a ctx provided from above! What if there
+	// was some timeout above? We gotta handle parent context like this.
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+}
+
+func ParallelGetV2() {
+	urls := []string{
+		"https://amazon.com",
+		"https://nytimes.com",
+		"https://wsj.com",
+		"https://facebook.com",
+		"https://google.com",
+		"http://localhost:8080/wait",
+	}
+
+	// give me the first response.
+	r, _ := first(context.Background(), urls)
+
+	if r.err != nil {
+		log.Printf("%-20s %s\n", r.url, r.err)
+	} else {
+		log.Printf("%-20s %s\n", r.url, r.latency)
+	}
+
+	time.Sleep(9 * time.Second)
+	log.Println("Quit anyway...", runtime.NumGoroutine(), "still running")
+
+}
+```
+
+Here is a program. There is one bug in it with leaking go routines. This is the
+main culprit of a memory leak - leaking goroutines and sockets.
+
+```go
+select {
+case r := <-results:
+    return &r, nil // we do deferred cancellation
+```
+
+Here in `first()`, We first start some goroutines. We then get the first res by
+listening to results channel. So wtf happens to the other goroutines? We cancel
+http operation, but those goroutines get hung up.
+
+This is because we made the results channel with no buffer.
+
+In an unbuffered channel, if someone wants to send, somebody else has to be able
+to receive (they happen roughly at same time.)
+
+So if there's nobody receiving, the sender blocks until there's somebody ready to
+receive!!
+
+So after we get the first res, the other goroutines that want to write to this
+channel are gonna get stuck!! They can't write, as there is nobody to read.
+
+So what we need to do, is to buffer to avoid leaking.
+If the channel is buffered, it means it already has a certain amount of space.
+So people can store their results on the channel even if there's nobody ready
+to receive.
+
+**Unbuffered channel**: sender can't send unless receiver is ready to receive
+**Buffered channel**: as long as there is space in buffer, the sender can send, and
+the receiver will receive later.
+`results := make(chan result, len(urls)) // buffer to avoid leaking, solves bug.`
+So now the goroutines are not gonna tick!
+
+**Values**
+Context values should be data specific to a req, like
+
+-   a trace ID or start time(for latency calculation)
+-   security or authorization data
+
+**_AVOID_** using the context to carry "optional" parameters.
+
+Use package specific, private context key type (not string) to avoid collisions.
+
 # 26 - Channels in Detail
 
+### Channel state
+
+Channels **block** unless ready to read or write.
+
+A channel is ready to write if:
+
+-   it has a buffer space, or
+-   at least one reader is ready to read (rendezvous)
+
+A channel is ready to read if:
+
+-   it has unread data in its buffer, or
+-   at least one writer is ready to write (rendezvous), or
+-   it is closed.
+
+Channels are unidirectional, but have two ends (which can be passed separately as params)
+
+-   and end for writing and closing
+
+```go
+func get(url string, ch chan<- result) {} // write-only end
+```
+
+-   an end for reading
+
+```go
+func collect(ch <-chan result) map[string]int // read-only end
+```
+
+We are constraining it here by only providing a read-end or write-end.
+Useful, makes it clear exactly what the channel will be doing in func.
+
+### Closed chans
+
+Channel reading is a bit like reading from map. can read from a nil map, it will
+return default value. When reading, have access to second var `ok`
+
+```go
+func main() {
+  ch := make(chan int, 1)
+
+  ch <- 1
+
+  b, ok := <-chan // 1 true
+  close(ch)
+  c, ok := <-chan // 0 false
+}
+```
+
+if we get rid of the buffer when making channel, go `ch := make(chan int)` and run,
+we get a crash - `all goroutines are asleep - deadlock!`
+**Deadlock** - none of the goroutines can make any progress cause they're all
+waiting for something. Go has a built in deadlock detector.
+
+In a concurrent program, we worried about race cons. So we use sync tools like
+channels to prevent race cons, but those can cause problems themselves.
+
+A channel can only be closed once (else it will panic)
+
+One of the main issues with working with goroutines is **ending** them.
+
+-   An unbuffered channel reqs a reader and writer.
+    (a writer blocked on a channel with no reader will "leak")
+-   Closing a channel is often a _signal_ that work is done.
+-   Only **one** goroutine can close a channel
+-   We need some way to coordinate closing a chan or stopping goroutines
+    (beyond the channel itself)
+
+### Nil channels
+
+Reading or writing a channel that is `nil` always blocks(\*)
+But a `nil` channel in a `select` block is _ignored_
+
+This can be useful
+
+-   Use a chan to get input
+-   Suspend in by changing the channel var to `nil`
+-   Can unsuspend in again
+-   But **close** the chan if there really is no more input (EOF)
+
+Use only when needed, can cause some issues and not always super clear.
+
+| State        | Receive           | Send          | Close                |
+| ------------ | ----------------- | ------------- | -------------------- |
+| Nil          | Block\*           | Block\*       | Panic                |
+| Empty        | Block             | Write         | Close                |
+| Partly Full  | Read              | Write         | Readable until empty |
+| Full         | Read              | Block         | Readable until empty |
+| Closed       | Default value\*\* | Panic         | Panic                |
+| Receive-only | OK                | Compile error | Compile error        |
+| Send-only    | Compile Error     | OK            | OK                   |
+
+\* Select ignores a nil channel since it would alwas block
+\*\* Reading a closed channel return (<default val>, !ok)
+
+### Unbuffered channels (rendezvous model) (default)
+
+> https://i.imgur.com/rEMwX8i.png
+
+-   The sender blocks until the receiver is ready (and vice versa)
+-   The send always happens before the receive
+-   The receive always _returns_ before the send
+-   **_The sender and receiver are synchronized_**
+
+Analogy of delivering package - delivery driver waits for u to sign package.
+Buffered is like a mailbox, smb puts letters in mailbox for u to pick up.
+
+Sender and receiver come together, do sth to exchange data, and separate.
+Whoever comes first, has to wait for the other one.
+
+SEND DOES NOT HAPPEN AFTER RECEIVE.
+
+What happens is
+
+1. Sender starts to send
+2. Receiver starts to receive
+3. Receiver finishes receiving
+4. Send finishes.
+
+So the sender knows when the send is done that the receiver has received!
+
+Even if receiver starts first, the sender will always end last.
+Receiver returns -> sender returns, so that sender knows the receive has happened.
+
+### Buffered channels
+
+> https://imgur.com/lyKNnyi
+
+-   The sender deposits its item and returns immediately.
+-   The sender blocks only if the buffer is full.
+-   The receiver blocks only if the buffer is empty
+-   **_The sender and receiver run independently_**
+
+### Buffering
+
+Allows the sender to send without waiting
+
+```go
+func main() {
+  // make a chan with buffer that holds 2 items
+  messages := make(chan string, 2)
+
+  // now we can send twice without getting blocked
+  messages <- "buffered"
+  messages <- "channel"
+
+  // and then receive them both as usual
+  fmt.Println(<-messages)
+  fmt.Println(<-messages)
+}
+```
+
+**_With a size 1 (or no buffer at alll), it will deadlock on send!!_**
+
+```go
+type T struct {
+	i byte
+	b bool
+}
+
+func send(i int, ch chan<- *T) {
+	t := &T{i: byte(i)}
+	ch <- t
+
+	// RACE CON
+	// once u give a var to channel, you renounce ownership of it.
+	t.b = true // UNSAFE AT ANY SPEED
+}
+
+func main() {
+	vs := make([]T, 5)
+	// unbuffered chan, rendezvous behaviour
+	ch := make(chan *T)
+
+	for i := range vs {
+		go send(i, ch)
+	}
+
+	time.Sleep(1 * time.Second) // all goroutines guaranteed to have started
+
+	// copy quickly
+	for i := range vs {
+		// read chan which has pointer, immediately dereference pointer and copy.
+		vs[i] = *<-ch
+	}
+
+	// print later
+	for _, v := range vs {
+		fmt.Println(v)
+	}
+}
+```
+
+Here, the results print all falses. Why?
+
+-   We're using unbuffered chan, so we are doing blocking sends. (rendezvous)
+-   We create T obj in send(), and sending on channel.
+-   Receive finishes before send finishes.
+-   So when we receive, we receive and copy probably before the sender has a chance
+    to return from its send and modify `t.b`
+
+***If we change this to be a buffered channel `make(chan *T, 5)`, we get `Trues`\***
+Now sends are non blocking. We read the values that have already been
+modified!
+
+### Why buffer?
+
+-   avoid goroutine leaks (from abandoned channel)
+-   avoid rendezvous pauses (performance improvement)
+
+Don't buffer until it's needed. _Buffering may hide a race condition_
+
+Special use: Counting semaphore pattern.
+It limits work in progress (or occupancy)
+
+Once it's full, only one unit of work can enter for each one that leaves
+
+We model this with a buffered channel:
+
+-   attempt to send (write) before starting work
+-   the send will block if the buffer is full (occupancy is at max)
+-   receive (read) when the work is done to free up a space in the buffer
+    (this allows next worker to start)
+
 # 27 - Concurrent File Processing
+
+Turning sequential program into concurrent.
+
+### Problem:
+
+Finding duplicate files based on their content
+Use a secure hash, because the names / dates may differ.
+
+Using MapReduce paradigm
+Bulk of work is reading the files and calculating the hashes.
+
+### Approach concurrent (like map-reduce)
+
+Use a fixed pool of goroutines and a collector and channels
+
+```mermaid
+graph LR;
+    TreeWalk-->|paths|Workers;
+    Workers-->|pairs|Collector;
+    Workers-->TreeWalk;
+    Collector-->|results|TreeWalk;
+```
 
 # 28 - Conventional Synchronization
 
