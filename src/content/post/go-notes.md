@@ -1929,6 +1929,7 @@ We model this with a buffered channel:
 
 # 27 - Concurrent File Processing
 
+https://youtu.be/SPD7TykYy5w?list=PLoILbKo9rG3skRCj37Kn5Zj803hhiuRK6
 Turning sequential program into concurrent.
 
 ### Problem:
@@ -1941,7 +1942,7 @@ Bulk of work is reading the files and calculating the hashes.
 
 ### Approach concurrent (like map-reduce)
 
-Use a fixed pool of goroutines and a collector and channels
+Use a fixed worker pool of goroutines and a collector and channels
 
 ```mermaid
 graph LR;
@@ -1951,34 +1952,981 @@ graph LR;
     Collector-->|results|TreeWalk;
 ```
 
+-   Fixed num of workers
+-   Feed these workers a channel of paths.
+-   Tree walk writes to chan, workers read the chan.
+-   When worker done, they feed pairs on channel to Collector.
+-   Collector will manage the final hash table. We can't write to it in parallel!
+    So we put the hash table with one writer(Collector) which will send data back on
+    results channel.
+
+How do we know we're done? Close the paths channel (that Workers are reading).
+Back to idea "last person out turn off light" - no practical way in this model
+for workers to coordinate who the last one is. So it's left up to main program.
+
+Main program will start workers, feed them, when done feeding it will close the
+paths channel and wait for workers to finish. Workers will signal they're done.
+Then main will close pairs channel, collector will finish and we'll get results.
+
+2 **Adding a goroutine for each directory**
+using `sync.WaitGroup`
+
+3 **Use goroutine for every dir and file hash**
+
+What can go wrong - we'll run out of threads.
+`GOMAXPROCS` doesnt't limit threads blocked on syscalls (all our disk I/O)
+We need to limit the num of _active_ goroutines instead (the ones making syscalls)
+
+We will use **Counting semaphores**
+
+-   A goroutine can't proceed without sending on a channel
+-   A ch with buff size N can accept N sends without blocking (with no intervening
+    reads)
+-   The buf provides a fixed upper bound (unlike WaitGroup)
+-   One goroutine can start for each one that finishes (each reads from chan when done)
+
+> https://imgur.com/a/gAif3DS
+
+```go
+package main
+
+import (
+	"crypto/md5"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync"
+)
+
+type pair struct {
+	hash string
+	path string
+}
+type fileList []string
+type results map[string]fileList
+
+func hashFile(path string) pair {
+	file, err := os.Open(path)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer file.Close()
+
+	hash := md5.New()
+
+	if _, err := io.Copy(hash, file); err != nil {
+		log.Fatal(err)
+	}
+
+	return pair{fmt.Sprintf("%x", hash.Sum(nil)), path}
+}
+
+func processFile(path string, pairs chan<- pair, wg *sync.WaitGroup, limits chan bool) {
+	defer wg.Done()
+
+	limits <- true
+
+	defer func() {
+		<-limits
+	}()
+
+	pairs <- hashFile(path)
+}
+
+func collectHashes(pairs <-chan pair, result chan<- results) {
+	hashes := make(results)
+
+	for p := range pairs {
+		hashes[p.hash] = append(hashes[p.hash], p.path)
+	}
+
+	result <- hashes
+}
+
+func searchTree(dir string, pairs chan<- pair, wg *sync.WaitGroup, limits chan bool) error {
+	defer wg.Done()
+
+	visit := func(path string, info os.FileInfo, err error) error {
+		if err != nil && err != os.ErrNotExist {
+			return err
+		}
+
+		if info.Mode().IsDir() && path != dir {
+			wg.Add(1)
+			go searchTree(path, pairs, wg, limits)
+			return filepath.SkipDir
+		}
+
+		if info.Mode().IsRegular() && info.Size() > 0 {
+			wg.Add(1)
+			go processFile(path, pairs, wg, limits)
+		}
+
+		return nil
+	}
+
+	limits <- true
+
+	defer func() {
+		<-limits
+	}()
+
+	return filepath.Walk(dir, visit)
+}
+
+func run(dir string) results {
+	workers := 2 * runtime.GOMAXPROCS(0)
+	limits := make(chan bool, workers)
+	pairs := make(chan pair)
+	result := make(chan results)
+	wg := new(sync.WaitGroup)
+
+	// need goroutine so we don't block
+	go collectHashes(pairs, result)
+
+	// multithread walk of dir tree; we need a waitGroup cause we don't know
+	// how many to wait for
+	wg.Add(1)
+
+	err := searchTree(dir, pairs, wg, limits)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// close the paths channel so the workers stop
+	wg.Wait()
+
+	close(pairs)
+
+	return <-result
+
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		log.Fatal("provide dir name")
+	}
+
+	if hashes := run(os.Args[1]); hashes != nil {
+		for hash, files := range hashes {
+			if len(files) > 1 {
+				fmt.Println(hash[len(hash)-7:], len(files))
+
+				for _, file := range files {
+					fmt.Println(" ", file)
+				}
+
+			}
+		}
+	}
+}
+```
+
+This is probably the best approach to this problem. Check code at `walks/`
+
+Check out Andahl's Law.
+
+**Conclusions**
+We don't need to limit goroutines.
+We need to limit the contention for shared resources (Disk/Network)
+
 # 28 - Conventional Synchronization
+
+These are the things Go's CSP model is built on.
+`Mutex, Once, Pool, RWMutex, WaitGroup`
+
+### Mutual exclusion
+
+What if multiple goroutines must read & write some data?
+
+We must make sure only one of them can do so at any instant ("critical section")
+
+We accomplist this with some kind of lock
+
+-   acquire the lock before accessing the data
+-   any other goroutine will **block** waiting to get the lock
+-   release the lock when done
+
+```go
+func do() int {
+	var n int64
+	var w sync.WaitGroup
+
+	for i := 0; i < 1000; i++ {
+		w.Add(1)
+
+		go func() {
+			n++ // DATA RACE
+			w.Done()
+		}()
+	}
+
+	w.Wait()
+	return int(n)
+}
+```
+
+This is some code for this problem - we will almost never get n to 1000.
+
+We can solve it with a counting semaphore of size 1.
+
+```go
+m := make(chan bool, 1)
+// ....
+go func() {
+	m <- true
+	n++
+	<-m
+	w.Done()
+}()
+```
+
+This is behaving exactly as a lock / mutex. We can do this in go.
+
+```go
+var m sync.Mutex
+// ....
+go func() {
+	m.Lock()
+	n++
+	m.Unlock()
+	w.Done()
+}()
+```
+
+Mutex is better designed for this purpose.
+
+```go
+type SafeMap struct { // original map in go not goroutine safe.
+  sync.Mutex  // not safe to copy
+  m map[string]int
+}
+
+// so methods must take a pointer not a value
+func (s *SafeMap) Incr(key string) {
+  s.Lock()
+  defer s.Unlock()
+
+  // only one goroutine can exec this code at the same time, guaranteed
+  s.m[key]++
+}
+```
+
+Sometimes we need to read more than write, so use `sync.RWMutex`.
+Multiple readers are allowed.
+
+For best perf, use `atomic` pkg, which is primitive and works more on hardware lvl.
+
+**Only once execution**
+Can ensure a fn runs only once
+
+```go
+var once sync.Once
+var x	*singleton
+
+func init() {
+  x = NewSingleton()
+}
+
+func handle(w http.ResponseWriter, r *http.Request) {
+  once.Do(init)
+  // ...
+}
+// Can't check if x == nil - UNSAFE
+```
+
+**Pool**
+Provides safe & efficient reuse of objects, but it's a container of `interface{}`
+
+```go
+var bufPool = sync.Pool{
+  New: func() interface{} {
+    return new(bytes.Buffer)
+  },
+}
+
+// ...
+b := bufPool.Get().(*bytes.Buffer) // reflection, need to downcast
+b.Reset()
+// write to it
+w.Write(b.Bytes())
+bufPool.Put(b)
+```
 
 # 29 - Homework #5 (h/w #4 part deux)
 
+Revisit server hw4, add in
+
+```go
+type database struct {
+	mu sync.Mutex
+	db map[string]dollars
+}
+
+// ....
+func (d *database) list(w http.ResponseWriter, req *http.Request) {
+	// make it concurrency safe
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// ....
+```
+
+Can run server with `-trace` flag.
+
+Need to pass in pointer to db struct to have pointer to mutex, cant copy mutexes.
+
 # 30 - Concurrency Gotchas
+
+### Fundamental problem with concurrency are:
+
+1. Race conditions, where unprotected read and writes overlap.
+
+-   must be some data that is written to
+-   could be a read-modify-write operation
+-   and two goroutines can do it at the same time.
+
+2. Deadlock, where no goroutine can make progress
+
+-   goroutines could all be blocked on empty channels
+-   goroutines could all be blocked waiting on a mutex.
+-   GC could be prevented from running (busy loop)
+
+Go detects some deadlocks automatically
+With `-race` it can find some data races.
+
+3. Goroutine leaks
+
+-   goroutine hangs on an empty or blocked channel
+-   not deadlock - other goroutines make progress
+-   often found by looking at `pprof` output
+
+Most common memory leak problem is hanging goroutines / hanging sockets.
+
+> When you start a goroutine, always know how/when it will end!
+
+4. Channel errors
+
+-   trying to send on a closed channel
+-   trying to send or receive on a nil channel
+-   closing a nil channel
+-   closing a channel twice.
+
+5. Other
+
+-   closure miscapture
+-   misuse of `Mutex`
+-   misuse of `WaitGroup`
+-   misuse of `select`
+
+```go
+ch := make(chan bool)
+go func(ok bool) {
+	fmt.Println("START")
+
+	if ok {
+		ch <- ok
+	}
+}(true)
+<-ch
+fmt.Println("DONE")
+```
+
+Here we deadlock as we are reading from ch, but nothing is sent on it, and it's
+not buffered so it expects rendezvous behaviour.
+
+In this example, a timeout leaves the goroutine hanging forever.
+The correct solution is to make a buffered channel
+
+```go
+func finishReq(timeout time.Duration) *obj {
+  ch := make(chan obj)
+
+  go func() {
+    // ...	// work that takes too long
+    ch <- fn()  // blocking send
+  }
+}()
+
+select {
+case rslt := <-ch:
+  return rslt
+case <-time.After(timeout):
+  return nil
+}
+```
+
+**Wait Group**
+Always, always, always all `Add` befor `go` or `Wait`
+
+**Closure Capture**
+A goroutine shouldn't capture a _mutating_ variable.
+
+```go
+for i := i; i < 10; i++ {     // WRONG
+  go func() {
+    fmt.Println(i)
+  1}()
+}
+
+// Instead, pass the variable's value as a param!!!
+for i := i; i < 10; i++ {
+  // or do i := i
+  go func(i int) {
+    fmt.Println(i)
+  }(i)
+}
+```
+
+**Select**
+
+-   default is always active
+-   a nil channel is always ignored
+-   a full channel (for send) is skipped ovre
+-   a "done" channel, _is just another channel_
+-   **available channels are selected at random**
+
+**Conclusions**
+
+1. Don't start a goroutine without knowing how it will stop
+2. Acquire locks/semaphores as late as possible; release in reverse order
+   (defer does that already)
+3. Don't wait for non-parallel work that you could do yourself.
+4. **_Simplify, Review, Test_**
 
 # 31 - Odds & Ends
 
+There are no enumerated types in Go
+You can make an almost-enum type using a named type and constant.
+
+Can use ... to denote variadic params and also unpack slices and such
+
+Not gonna use this prob but here's vid
+https://youtu.be/oTtYtrFv3gw
+
+Go has `goto` which probably shouldnt be used much.
+
 # 32 - Error Handling
+
+https://youtu.be/oIxXp0OgK_0
+
+Most of the time, errors are just strings.
+
+Errors in Go are objects satisfying the `error` interface.
+
+Any concrete type with `Error()` can represent a string.
+
+`Errors.Is` operates on an error var
+`Errors.As` operates on an error type (downcasting)
+
+### Normal error
+
+result from input or external conditions (e.g file not found)
+
+Go code handles this case by returning the `error` type.
+
+### Abnormal errors
+
+Result from invalid program logic (e.g nil pointer)
+For program logic errors, Go code does a `panic`
+
+```go
+func (d *digest) checkSum() [Size]byte {
+  // finish writing checksum
+  ...
+  if d.nx != 0 { // panic if theres data leftover
+    panic("d.nx != 0")
+  }
+}
+```
+
+This is a fault of logic that's doing the processing here.
+
+### When your program has a logic bug, FAIL HARD, FAIL FAST
+
+Why?
+
+If your server crashes, it will get immediate attention.
+
+-   logs are often noisy
+-   so proactive log searches for "problems" are rare.
+
+We want evidence of the failure as close as possible in time and space to the
+original defect in the code
+
+-   connect the crash to logs that explain the context
+-   traceback from the point closest to the broken logic.
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+In a distributed system, crash failures are the safest type to handle.
+
+-   It's better to die than to be a zombie or babble or corrupt the DB.
+-   not crashing may lead to Byzantine failures
+
+It's the best to just crash.
+
+### When should we panic??
+
+Only when the error was caused by our own programming defect, e.g
+
+-   we can't walk a data structure we built
+-   we have an off by one bug encoding bytes etc
+
+> PANIC SHOULD ONLY BE USED WHEN OUR ASSUMPTIONS OF OUR OWN PROGRAMMING DESIGN
+> OR LOGIC ARE WRONG.
+
+These cases might use an "assert" in other programming langs.
+
+### Define errors out of existence
+
+Error (edge) cases are one of the primary sources of complexity.
+
+**_The best way to deal with many errors is to make them impossible_**
+
+Design abstractions so that most (or all) operations are safe:
+
+-   reading from a nil map
+-   appending to a nil slice
+-   deleting a non-existant item from a map
+-   taking the len of an unitialized string
+
+Try to reduce edge cases that are hard to test or debug (or even think about)
+
+### Proactively prevent problems
+
+Every piece of data in program should start life in a valid state.
+
+Every transformation should leave it in a valid state.
+
+-   break large programs into small pieces you can understand.
+-   hide info to reduce the chance of corruption
+-   avoid clever code and side effects
+-   avoid unsafe operations
+-   assert your invariants
+-   never ignore errors
+-   test, test, test
+-   never ever accept input from user (or environment) without validation
+
+In Go, we handle errors right in place. This is good, as it gives visibility -
+it might be verbose, but it's explicit.
 
 # 33 - Reflection
 
+https://youtu.be/T2fqLam1iuk?list=PLoILbKo9rG3skRCj37Kn5Zj803hhiuRK6 - for
+json type matching
+
+It's the notion of a program looking at itself.
+
+To extract a specific type, we can use a type assertion (downcasting)
+
+```go
+var w io.Writer = os.Stdout
+f, ok := w.(*os.File) // success
+b, ok := w.(*bytes.Buffer) // failure
+```
+
+We can also switch on a type (as opposed to value.)
+
+```go
+func Println(args ...interface{}) {
+  buf := make([]byte, 0, 80)
+
+  for arg := range args {
+    switch a := arg.(type) {
+    case string:
+      buf = append(buf, a...)
+    case Stringer:
+      buf = append(buf, a.String()...)
+    }
+  }
+}
+```
+
 # 34 - Mechanical Sympathy
+
+https://youtu.be/7QLoOd9HinY?list=PLoILbKo9rG3skRCj37Kn5Zj803hhiuRK6
+
+Go tends to be used in cloud. When we build in cloud, we make some concessions
+on perf. Deliberate choice to accept some overhead
+
+We have to tradeoff perf against:
+
+-   choice of architecture
+-   quality, reliability, scalability
+-   const of dev & ownership
+
+Need to optimise where we can given those choices.
+We still want simplicity, readability, maintainability of code.
+
+### Optimization
+
+Top-down refinement
+
+1. Architecture: latency, const of comms
+2. Design: algos, concurrency, layers
+3. Implementation: programming lang, memory use
+
+Mechanical sympathy plays role in implementation.
+
+Interpreted langs may cost 10x more to operate due to their inefficiency.
+
+around 2005 processors stopped getting much faster.
+
+consider gap between CPU and Memore (DRAM) perf. CPU gotten faster, but memory
+not as much
+
+Realities
+
+-   CPUs not getting faster anymore
+-   The gap between memory and CPU is not shrinking
+-   software gets slower more quickly that CPU gets faster.
+
+Also software got much more bloated. Eating up CPU and capacity. (like interpreted langs)
+
+Two competing realities
+
+-   maintain or improve perf of software
+-   control the cost of dev
+
+The only way to do that is:
+
+-   make software simpler
+-   **make software that works with the machine, not against it** (suck less.)
+
+### Memory caching
+
+"computational cost" is often dominated by **memory access cost**
+
+Caching takes advantage of access patterns to keep freq used code and data "close"
+to the CPU to reduce access time.
+
+To get best perf, we want to
+
+-   keep things in contiguous memory
+-   access them sequentially
+
+### Access Patterns
+
+> A little bit of copying is better than lots of pointer chasing!!!
+
+A slice of objects beats a list with pointers!
+
+A struct with contiguous fields beats a class with pointers. (cost of pointer chasing)
+
+Calling lots of short methods via dynamic dispatch is very expensive.
+The cost of calling a fn should be directly proportional to the work it does
+
+Bad design to have method call that goes to other obj to do method call that
+goes to another obj etc etc, "passing the buck". Too many layers of abstraction.
+
+We take a little piece of work and magnify its cost by all these dynamically
+dispatched method calls.
+
+Avoid short method calls. Harder to read if little methods spread all over. Also
+massive perf issues.
+
+Sync cost - False sharing - cores fight over a cache line for different vars.
+
+Only other big cost we can control is GC.
+
+-   reduce unnecessary allocations
+-   reduce embedded pointers in objs
+-   paradoxically, may want larger heap
+
+### Go gives you lots of choices. How to Optimize?
+
+Can choose
+
+-   to allocate contiguously
+-   to copy or not copy
+-   to allocate on the stack or heap (sometimes)
+-   to be synchronous or async
+-   to avoid unnecessary abstraction layers
+-   to avoid short/forwarding methods
+
+Go doesn't get between you and the machine
+
+**_Good code in Go doesn't hide the costs involved_**
+We want to make logic and cost both explicit and clear!
+
+There are only 3 optimizations:
+
+1. Do less
+2. Do it less often
+3. Do it faster
+
+"The largest gains come from 1, but we spend all our time on 3."
 
 # 35 - Benchmarking
 
+https://youtu.be/nk4rALKLQkc?list=PLoILbKo9rG3skRCj37Kn5Zj803hhiuRK6
+
+List vs slice
+False sharing
+
+Few things to consider
+
+-   Is the data/code available in cache?
+-   did u hit a garbage collection
+-   did virtual memory have to page in/out
+-   did branch prediction work the same way
+-   did the compiler remove code via optimization
+-   are u running in parallel? how many cores?
+-   are those cores virtual
+-   are u sharing a core with anything else
+-   what other processes are sharing the machine
+
 # 36 - Profiling
+
+Good way to test is using `pprof`, running some traffic on server, checking if
+there are more goroutines that expected hanging about (leak)
+
+Prometheus metrics
 
 # 37 - Static Analysis
 
+Aka linting. Tools that inspect code and help see issues before running program.
+
+Some other tools:
+goconst
+gosec
+ineffasign
+gocyclo
+deadcode, unused, varcheck
+unconvert
+gosimple
+
+**One tool to rule them all**
+`golangci-lint`
+
 # 38 - Testing
+
+https://youtu.be/PIPfNIWVbc8?list=PLoILbKo9rG3skRCj37Kn5Zj803hhiuRK6
+
+**Testing culture**
+"Tests are the contract about what your software does and does not do.
+Unit tests at the pkg level should lock in the behaviour of the pkgs API. They
+describe in code what the pkg promises to do. If there is a unit test for each
+input permutation, you have defined the contract for what the code will do
+in code, not documentation"
+
+"This is a contract u can assert as simply as typing `go test`. At any stage,
+you can know with a high degree of confidence that the behaviour people relied
+on before your changes continues to function after your change."
+
+**_Should make assumption your code does not work, unless_**
+
+-   You have tests (unit, integration, etc)
+-   They work correctly
+-   You run them
+-   They pass
+
+Work is not done until we've added or updated the tests.
+Basic code hygiene. Start clean, stay clean.
+
+"The hardest bugs are those where your mental model of the situation is just
+wrong, so u can't see the problem at all."
+
+Developers test to show that things are working and done according to their
+understanding of the problem & solution.
+
+Most difficulties are failures of imagination.
+
+**_There are 8 levels of correctness in order of increasing difficulty of
+achievement.(Gries & Conway)_**
+
+1. it compiles (and passes static analysis)
+2. it has no bugs that can be found just running the program
+3. it works for some hand picked data
+4. it works for typical reasonable input
+5. it works with test data chosen to be difficult
+6. it works for all input that follows the spec
+7. it works for all valid input and likely error cases
+8. it works for all input.
+
+"it works" means it produces the desired behaviour or fails safely.
+
+**_There are 4 different types of errors. (Gries & Conway)_**
+
+1. errs in understanding the problem reqs.
+2. errs in understanding the programming lang.
+3. errs in understanding the underlying algos.
+4. errs where u knew better but simply slipped up
+
+Should aim form 75 - 85% code coverage
+
+-   unit tests
+-   integration tests
+-   post deployment sanity checks.
+
+Devs must be responsible for the quality of their code.
+
+Reality check:
+Pick any two
+
+-   good
+-   fast
+-   cheap
+
+You cant have all three in the real world.
 
 # 39 - Code Coverage
 
+https://youtu.be/HfCsfuVqpcM?list=PLoILbKo9rG3skRCj37Kn5Zj803hhiuRK6
+
+`go test -cover`
+Can use `-coverprofile` to gen file with coverage counts
+Can see visually with `go tool conver -html=coverage.out`
+Can use `-covermode=count` to see as heatmap.
+
 # 40 - Go Modules
+
+Go module support solves several problems
+
+-   avoid the need for $GOPATH
+-   group packages versioned/released together
+-   provide semantic versioning & backwards compatibility
+-   provide in project dependency management
+-   offer strong dependency security & availability
+-   continue support of vendoring
+-   work transparently across the Go ecosystem
 
 # 41 - Building Go Programs
 
+https://youtu.be/rXgUP_BNyaI?list=PLoILbKo9rG3skRCj37Kn5Zj803hhiuRK6
+
+Can build a "pure" go program
+
+A "pure" program can be put into a "from-scratch" container. All you need
+is a go binary.
+
+It not being dynamic is a good thing.
+
+Go can cross-compile.
+
+### Project layout
+
+```
+Root
+README
+Makefile
+(build/ -> Dockerfile)
+cmd/ -> programs
+(deploy/ -> K8s files)
+go.mod
+go.sum
+pkg/ -> libraries
+(scripts/)
+test/integration tests (most test files go in same place tested file is)
+(vendor/ -> modules)
+```
+
+Documentation - README.MD should be full of info.
+
+"Just read the source code" is not enough.
+
+-   overview - who and what is it for
+-   dev setup
+-   project & dir tree structure
+-   dependency management
+-   how to build/install (make targets etc)
+-   how to test it (UTs, integration, e2e, load, etc)
+-   how to run it (locally, in docker)
+-   database & schema
+-   credentials & security
+-   debugging monitoring (metrics, logs)
+-   CLI and usage
+
+Reasons we might need a `Makefile`
+
+-   we need to calculate params
+-   we have other steps/dependencies
+-   options are way too long to type
+-   may have non-Go commands (Docker, cloud provider etc.)
+
+**Versioning the executable**
+Keep track of a version string. (setting compile-time vars for versioning)
+
+**Docker**
+We can use Docker to build as well as to run
+
+-   multi stage builds
+-   use a `golang` image to build
+-   copy the results to another img
+
+Result is a small docker container built for linux. Can run it without Go install
+Great for CI/CD envs.
+
 # 42 - Parametric Polymorphism
 
+###Generics in Go
+
+Use type params to replace dynamic typing with static typing
+`interface{} + v.(T)` -> `type MyType[T any] struct{...}`
+
+Continue to use (non-empty) interfaces wherever possible
+Performance should not be main reason for using generics.
+
+Don't be clever with it.
+
+```go
+type Vector[T any] []T
+
+func (v *Vector[T]) Push(x T) {
+	*v = append(*v, x)
+}
+
+func Map[F, T any](s []F, f func(F) T) []T {
+	r := make([]T, len(s))
+
+	for i, v := range s {
+		r[i] = f(v)
+	}
+
+	return r
+}
+
+func main() {
+	s := Vector[int]{}
+
+	s.Push(1)
+	s.Push(2)
+
+	t1 := Map(s, strconv.Itoa)
+	t2 := Map([]int{1, 2, 3}, strconv.Itoa)
+
+	fmt.Printf("t1: %#v\n", t1)
+	fmt.Printf("t2: %#v\n", t2)
+}
+```
+
+Writing a map isn't very "Go-ish". Just use a plain old for loop.
+
 # 43 - Parting Thoughts
+
+-   Clear is better than clever
+-   A little copying is better than a little dependency
+-   Concurrency it not parallelism
+-   Channels orchestrate; mutexes serialise
+-   Don't communicate by sharing memory, share memory by communicating
+-   Make the zero value useful
+-   The bigger the interface, the weaker the abstraction
+-   Errors are values
+-   Don't just check errors, handle them gracefully
+
+"Built your software so it's obviously correct."
+
+### Good presentations
+
+-   Simple made easy (Rich Hickey)
+-   Small is beautiful (Kevlin Henney)
+-   **Software that fits your head** (Dan North)
+-   Worse is better, for better or worse (Kevlin Henney)
+-   Solid snakes, or how to take 5 weeks of vacation
+
+"Never stop learning"
