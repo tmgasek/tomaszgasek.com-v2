@@ -16,7 +16,9 @@ interface Props {
 }
 
 const { entry } = Astro.props
-const { Content, remarkPluginFrontmatter } = await entry.render()
+const { Content, remarkPluginFrontmatter, headings } = await entry.render()
+
+const topHeadings = headings.filter((h) => h.depth === 1)
 ---
 
 <BaseLayout title={entry.data.title}>
@@ -44,8 +46,19 @@ const { Content, remarkPluginFrontmatter } = await entry.render()
         </div>
     </div>
     <article>
+        <div id="toc">
+            {
+                topHeadings.map((h) => (
+                    <a href={`#${h.slug}`}>
+                        <h3>{h.text}</h3>
+                    </a>
+                ))
+            }
+        </div>
         <Content />
     </article>
+
+    <button id="backToTopButton" aria-label="Back to Top">↑</button>
 </BaseLayout>
 
 <style>
@@ -64,4 +77,56 @@ const { Content, remarkPluginFrontmatter } = await entry.render()
         flex-direction: column;
         margin-bottom: 3em;
     }
+
+    #backToTopButton {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background-color: #fff;
+        color: #000;
+        border: none;
+        border-radius: 4px;
+        padding: 10px;
+        cursor: pointer;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        opacity: 0;
+        visibility: hidden;
+        transition:
+            opacity 0.3s,
+            visibility 0.3s;
+    }
+
+    #backToTopButton.show {
+        opacity: 1;
+        visibility: visible;
+    }
+
+    #toc {
+        font-size: 0.8em;
+        display: grid;
+        grid-template-columns: 1fr;
+    }
+
+    #toc > a > h3 {
+        margin: 0.1em 0;
+    }
 </style>
+
+<script>
+    const backToTopButton = document.getElementById("backToTopButton")
+
+    window.addEventListener("scroll", () => {
+        if (window.scrollY > 300) {
+            backToTopButton?.classList.add("show")
+        } else {
+            backToTopButton?.classList.remove("show")
+        }
+    })
+
+    backToTopButton?.addEventListener("click", () => {
+        window.scrollTo({
+            top: 0,
+            behavior: "auto",
+        })
+    })
+</script>

@@ -21,9 +21,6 @@ const { title } = Astro.props
                 <nav>
                     <ul>
                         <li>
-                            <a class="nav-item" href="/">Home</a>
-                        </li>
-                        <li>
                             <a class="nav-item" href="/posts">Posts</a>
                         </li>
                     </ul>
@@ -39,11 +36,8 @@ const { title } = Astro.props
 
         <style is:global>
             :root {
-                --black: #0d0d0d;
                 --white: #f5f5f5;
-                --cyan: #7daea3;
-                --orange-dim: #cb775d;
-                --white-dim: #bbc3d4;
+                --accent: #005757;
                 --black: #191d24;
             }
 
@@ -448,7 +442,7 @@ const { title } = Astro.props
             }
 
             a {
-                color: var(--cyan);
+                color: var(--accent);
             }
             pre {
                 border-radius: 4px;
@@ -511,7 +505,8 @@ const { title } = Astro.props
             }
 
             .nav-item:hover {
-                background-color: var(--cyan);
+                background-color: var(--accent);
+                color: var(--white);
             }
         </style>
     </body>

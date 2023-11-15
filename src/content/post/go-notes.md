@@ -5,24 +5,9 @@ publishDate: 2023-10-18
 tags: ["notes", "go"]
 ---
 
-Goals of go
+# 03 - Basic Types
 
--   simplicity, safety, readability
--   ease of expressing algorithms
--   orthogonality
--   one right way to do things
-
-### 00 - Intro and Why Use Go?
-
-Easy to deploy - put a go program in container and good to go.
-
-### 01 - Hello world!
-
-### 02 - Simple Example
-
-### 03 - Basic Types
-
-In go there are only 25 keywords!
+In go there are only 25 keywords
 
 In an intepretive lang like Python, when you do `a = 2`, a is an obj that
 represents or masquerades as a number in the interpreter - eventually the
